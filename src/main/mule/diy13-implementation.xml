@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+	<global-property doc:name="Global Property" doc:id="20185bc3-de76-4504-93f5-2aeaa19709ee" name="env" value="dev"/>
+	<configuration-properties doc:name="Configuration properties" doc:id="e2ad5619-1ef6-4c80-b535-5973b4b16dac" file="${env}-properties.yaml" />
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="d1e4627b-fd8c-4fe7-b93d-1aec084c9b22" >
+		<db:my-sql-connection host="${db.host}" port="${db.port}" user="${db.user}" password="${db.password}" database="${db.database}"/>
+	</db:config>
+	<vm:config name="VM_Config" doc:name="VM Config" doc:id="aa359a1c-452e-44be-b00f-30f4968f322d" >
+		<vm:queues >
+			<vm:queue queueName="validate" />
+		</vm:queues>
+	</vm:config>
+	<flow name="diy13-implementationFlow" doc:id="599bb21e-490c-4958-af40-1be3e6ccbf14" >
+		<scheduler doc:name="Scheduler" doc:id="ba58a504-15c6-4caf-9939-cef4c6b015a9" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="5000"/>
+			</scheduling-strategy>
+		</scheduler>
+		<os:retrieve doc:name="get-lastTransID" doc:id="92bc4b3f-d589-4afe-a07c-8a5b23834441" key="lastTransID" target="lastTransID">
+			<os:default-value ><![CDATA[0]]></os:default-value>
+		</os:retrieve>
+		<db:select doc:name="Select Flights Data" doc:id="f0fb34b9-c9b5-42af-b649-8062378057bf" config-ref="Database_Config">
+			<db:sql ><![CDATA[SELECT * FROM flights_transactions WHERE transactionID > :lastTransID
+LIMIT 10]]></db:sql>
+			<db:input-parameters ><![CDATA[#[{
+	lastTransID: vars.lastTransID
+}]]]></db:input-parameters>
+		</db:select>
+		<os:store doc:name="Store" doc:id="f7ae7125-36a0-48af-8193-412a0f5add7c" key="lastTransID">
+			<os:value ><![CDATA[#[max(payload.*transactionID default [vars.lastTransID])]]]></os:value>
+		</os:store>
+		<batch:job jobName="diy13-implementationBatch_Job" doc:id="88588d66-36a6-4b19-9e4f-f5312071fce9" >
+			<batch:process-records >
+				<batch:step name="Batch_Step" doc:id="09914d7c-8edf-4bfa-9416-9dd44b72c471" >
+					<vm:publish-consume doc:name="queue validation" doc:id="bbbdebf0-c8e9-467e-a68d-eaf53e2ae265" config-ref="VM_Config" queueName="validate" timeout="300" target="validate" />
+				</batch:step>
+				<batch:step name="Batch_Step1" doc:id="2f09d746-f032-42a9-bcb3-12f0c4554da5" acceptExpression="#[vars.validate]">
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="93ac9344-3bfb-4b2a-bc80-6dbccb4df61b" size="50">
+						<file:write doc:name="Write" doc:id="ad5572e9-9eda-48ff-9a08-9d9c62a5ebd4" path="#[&quot;$(p('output'))/batchFile_$(now() as String {format: 'YYYY-MM-dd-HH.mm.SS'}).csv&quot;]">
+							<file:content ><![CDATA[#[output application/csv
+---
+payload]]]></file:content>
+						</file:write>
+					</batch:aggregator>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Logger" doc:id="584bea28-9d9d-482f-8c27-3c2975c9f0d7" message="#[payload]" />
+			</batch:on-complete>
+		</batch:job>
+	</flow>
+	<flow name="diy13-implementationFlow1" doc:id="44601eea-e186-45ed-869b-1a47a02ccd33" >
+		<vm:listener doc:name="Listener" doc:id="e100bd34-6898-4c8e-993c-c3bb2b61b01d" config-ref="VM_Config" queueName="validate" timeout="300"/>
+		<ee:transform doc:name="Transform Message" doc:id="3e46d100-d617-46e9-b6f3-dbbd993ac11f" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+if (mod(payload.transactionID as Number, 4) == 0)
+	true
+else
+	false]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+</mule>

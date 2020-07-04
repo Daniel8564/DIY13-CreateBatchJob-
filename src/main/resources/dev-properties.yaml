@@ -1,0 +1,10 @@
+db:
+  host: "mudb.learn.mulesoft.com"
+  port: "3306"
+  user: "mule"
+  password: "mule"
+  database: "training"
+  
+output: "C:/Users/Daniel/Desktop/DIY13"
+
+  
